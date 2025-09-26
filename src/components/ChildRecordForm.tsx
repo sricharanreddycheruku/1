@@ -30,7 +30,26 @@ export function ChildRecordForm({ onSaved }: ChildRecordFormProps) {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [bmiPreview, setBmiPreview] = useState<{ bmi: number; status: string } | null>(null);
 
+  // Calculate BMI preview when weight/height changes
+  React.useEffect(() => {
+    if (formData.childWeight && formData.childHeight && formData.age) {
+      const weight = Number(formData.childWeight);
+      const height = Number(formData.childHeight);
+      const age = Number(formData.age);
+      
+      if (weight > 0 && height > 0 && age > 0) {
+        const bmi = calculateBMI(weight, height);
+        const status = getMalnutritionStatus(bmi, age);
+        setBmiPreview({ bmi, status });
+      } else {
+        setBmiPreview(null);
+      }
+    } else {
+      setBmiPreview(null);
+    }
+  }, [formData.childWeight, formData.childHeight, formData.age]);
   const getCurrentLocation = () => {
     if (!navigator.geolocation) {
       alert(t('alerts.geolocationNotSupported'));
@@ -293,6 +312,29 @@ export function ChildRecordForm({ onSaved }: ChildRecordFormProps) {
             )}
           </div>
         </div>
+
+        {/* BMI Preview */}
+        {bmiPreview && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <h3 className="text-sm font-medium text-blue-900 mb-2">Health Assessment Preview</h3>
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <span className="text-blue-700">BMI: </span>
+                <span className="font-semibold">{bmiPreview.bmi.toFixed(1)}</span>
+              </div>
+              <div>
+                <span className="text-blue-700">Status: </span>
+                <span className={`font-semibold ${
+                  bmiPreview.status === 'Normal' ? 'text-green-600' :
+                  bmiPreview.status.includes('Moderate') ? 'text-orange-600' :
+                  'text-red-600'
+                }`}>
+                  {bmiPreview.status}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Parent/Guardian Information */}
         <div>

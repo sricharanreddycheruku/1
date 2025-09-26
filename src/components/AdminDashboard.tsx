@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend
+  PieChart, Pie, Cell, Legend, LineChart, Line
 } from 'recharts';
-import { Users, AlertTriangle, Upload, TrendingUp, Download, Search } from 'lucide-react';
+import { Users, AlertTriangle, Upload, TrendingUp, Download, Search, Filter, Calendar, MapPin, FileText } from 'lucide-react';
 import { ChildRecord, AdminStats } from '../types';
 import { db } from '../services/database';
 import { PDFService } from '../services/pdf';
@@ -19,6 +19,9 @@ export function AdminDashboard() {
   const [records, setRecords] = useState<ChildRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchHealthId, setSearchHealthId] = useState('');
+  const [dateFilter, setDateFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [regionFilter, setRegionFilter] = useState('all');
 
   useEffect(() => {
     loadDashboardData();
@@ -67,6 +70,46 @@ export function AdminDashboard() {
     }
   };
 
+  const getFilteredRecords = () => {
+    let filtered = [...records];
+
+    // Date filter
+    if (dateFilter !== 'all') {
+      const now = new Date();
+      const filterDate = new Date();
+      
+      switch (dateFilter) {
+        case 'today':
+          filterDate.setHours(0, 0, 0, 0);
+          break;
+        case 'week':
+          filterDate.setDate(now.getDate() - 7);
+          break;
+        case 'month':
+          filterDate.setMonth(now.getMonth() - 1);
+          break;
+      }
+      
+      filtered = filtered.filter(record => new Date(record.createdAt) >= filterDate);
+    }
+
+    // Status filter
+    if (statusFilter !== 'all') {
+      if (statusFilter === 'uploaded') {
+        filtered = filtered.filter(record => record.isUploaded);
+      } else if (statusFilter === 'pending') {
+        filtered = filtered.filter(record => !record.isUploaded);
+      } else {
+        filtered = filtered.filter(record => {
+          const bmi = calculateBMI(record.childWeight, record.childHeight);
+          const status = getMalnutritionStatus(bmi, record.age);
+          return status.toLowerCase().includes(statusFilter);
+        });
+      }
+    }
+
+    return filtered;
+  };
   const handleSearchAndDownload = async () => {
     if (!searchHealthId.trim()) {
       alert(t('alerts.enterHealthId'));
@@ -124,6 +167,26 @@ export function AdminDashboard() {
   const AGE_ORDER = ['0-1', '1-3', '3-5', '5-10', '10+'];
   ageGroupData.sort((a, b) => AGE_ORDER.indexOf(a.age) - AGE_ORDER.indexOf(b.age));
 
+  // Trend data for the last 7 days
+  const trendData = Array.from({ length: 7 }, (_, i) => {
+    const date = new Date();
+    date.setDate(date.getDate() - (6 - i));
+    const dayRecords = records.filter(record => {
+      const recordDate = new Date(record.createdAt);
+      return recordDate.toDateString() === date.toDateString();
+    });
+    return {
+      date: date.toLocaleDateString('en-US', { weekday: 'short' }),
+      records: dayRecords.length,
+      malnutrition: dayRecords.filter(record => {
+        const bmi = calculateBMI(record.childWeight, record.childHeight);
+        const status = getMalnutritionStatus(bmi, record.age);
+        return status !== 'Normal';
+      }).length
+    };
+  });
+
+  const filteredRecords = getFilteredRecords();
   const renderCustomizedLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent }: any) => {
     const RADIAN = Math.PI / 180;
     const radius = innerRadius + (outerRadius - innerRadius) * 0.5;
@@ -219,8 +282,76 @@ export function AdminDashboard() {
         </div>
       </div>
 
+      {/* Advanced Filters */}
+      <div className="bg-white rounded-xl shadow-lg p-6">
+        <h3 className="text-xl font-bold text-gray-900 mb-4">Advanced Filters</h3>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Date Range</label>
+            <select
+              value={dateFilter}
+              onChange={(e) => setDateFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="all">All Time</option>
+              <option value="today">Today</option>
+              <option value="week">Last 7 Days</option>
+              <option value="month">Last 30 Days</option>
+            </select>
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Upload Status</label>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="all">All Records</option>
+              <option value="uploaded">Uploaded</option>
+              <option value="pending">Pending</option>
+              <option value="normal">Normal Status</option>
+              <option value="moderate">Moderate Malnutrition</option>
+              <option value="severe">Severe Malnutrition</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Region</label>
+            <select
+              value={regionFilter}
+              onChange={(e) => setRegionFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="all">All Regions</option>
+              <option value="north">North Region</option>
+              <option value="south">South Region</option>
+              <option value="east">East Region</option>
+              <option value="west">West Region</option>
+            </select>
+          </div>
+
+          <div className="flex items-end">
+            <button
+              onClick={() => {
+                setDateFilter('all');
+                setStatusFilter('all');
+                setRegionFilter('all');
+              }}
+              className="w-full px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+            >
+              Clear Filters
+            </button>
+          </div>
+        </div>
+        
+        <div className="mt-4 text-sm text-gray-600">
+          Showing {filteredRecords.length} of {records.length} records
+        </div>
+      </div>
+
       {/* Charts */}
-      <div className="grid lg:grid-cols-2 gap-8">
+      <div className="grid lg:grid-cols-3 gap-8">
         <div className="bg-white rounded-xl shadow-lg p-6">
           <h3 className="text-xl font-bold text-gray-900 mb-6">{t('nutritionalStatusDistribution')}</h3>
           <ResponsiveContainer width="100%" height={300}>
@@ -254,12 +385,32 @@ export function AdminDashboard() {
             </BarChart>
           </ResponsiveContainer>
         </div>
+
+        <div className="bg-white rounded-xl shadow-lg p-6">
+          <h3 className="text-xl font-bold text-gray-900 mb-6">Weekly Trends</h3>
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={trendData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date" />
+              <YAxis />
+              <Tooltip />
+              <Line type="monotone" dataKey="records" stroke="#6366F1" strokeWidth={2} name="Total Records" />
+              <Line type="monotone" dataKey="malnutrition" stroke="#EF4444" strokeWidth={2} name="Malnutrition Cases" />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
       </div>
 
 
       {/* Recent Records */}
       <div className="bg-white rounded-xl shadow-lg p-6">
-        <h3 className="text-xl font-bold text-gray-900 mb-6">{t('recentRecords')}</h3>
+        <div className="flex justify-between items-center mb-6">
+          <h3 className="text-xl font-bold text-gray-900">{t('recentRecords')}</h3>
+          <div className="flex items-center space-x-2 text-sm text-gray-600">
+            <FileText className="w-4 h-4" />
+            <span>{filteredRecords.length} records</span>
+          </div>
+        </div>
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
@@ -267,13 +418,15 @@ export function AdminDashboard() {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500">{t('childName')}</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500">{t('healthIdLabel')}</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500">{t('age')}</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500">BMI</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500">{t('statusLabel')}</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500">{t('createdLabel')}</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500">Upload</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500">{t('actions')}</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {records.slice(0, 10).map((record) => {
+              {filteredRecords.slice(0, 20).map((record) => {
                 const bmi = calculateBMI(record.childWeight, record.childHeight);
                 const malnutritionStatus = getMalnutritionStatus(bmi, record.age);
                 return (
@@ -281,6 +434,7 @@ export function AdminDashboard() {
                     <td className="px-6 py-4">{record.childName}</td>
                     <td className="px-6 py-4 font-mono text-indigo-600">{record.healthId}</td>
                     <td className="px-6 py-4">{record.age}</td>
+                    <td className="px-6 py-4 font-semibold">{bmi.toFixed(1)}</td>
                     <td className="px-6 py-4">
                       <span className={
                         malnutritionStatus === 'Normal' ? 'bg-green-100 text-green-800 px-2 py-1 rounded-full' :
@@ -291,6 +445,13 @@ export function AdminDashboard() {
                       </span>
                     </td>
                     <td className="px-6 py-4">{new Date(record.createdAt).toLocaleDateString()}</td>
+                    <td className="px-6 py-4">
+                      <span className={`px-2 py-1 text-xs rounded-full ${
+                        record.isUploaded ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
+                      }`}>
+                        {record.isUploaded ? 'Uploaded' : 'Pending'}
+                      </span>
+                    </td>
                     <td className="px-6 py-4">
                       <button
                         onClick={() => PDFService.downloadHealthBooklet(record)}

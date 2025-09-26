@@ -1,7 +1,7 @@
 // components/RecordsList.tsx
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Eye, Download, Upload, MapPin, Clock, CheckCircle, AlertCircle, Search, Filter } from 'lucide-react';
+import { Eye, Download, Upload, MapPin, Clock, CheckCircle, AlertCircle, Search, Filter, RefreshCw, Wifi } from 'lucide-react';
 import { ChildRecord } from '../types';
 import { db } from '../services/database';
 import { PDFService } from '../services/pdf';
@@ -19,6 +19,7 @@ export function RecordsList() {
   const [selectedRecord, setSelectedRecord] = useState<ChildRecord | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [showAuthForSync, setShowAuthForSync] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState(SyncService.getConnectionStatus());
 
   useEffect(() => {
     loadRecords();
@@ -26,9 +27,25 @@ export function RecordsList() {
     // Listen for sync events
     const handleSyncComplete = () => {
       loadRecords();
+      setConnectionStatus(SyncService.getConnectionStatus());
     };
+
+    const updateConnectionStatus = () => {
+      setConnectionStatus(SyncService.getConnectionStatus());
+    };
+
     window.addEventListener('syncComplete', handleSyncComplete);
-    return () => window.removeEventListener('syncComplete', handleSyncComplete);
+    window.addEventListener('online', updateConnectionStatus);
+    window.addEventListener('offline', updateConnectionStatus);
+    
+    const interval = setInterval(updateConnectionStatus, 5000);
+    
+    return () => {
+      window.removeEventListener('syncComplete', handleSyncComplete);
+      window.removeEventListener('online', updateConnectionStatus);
+      window.removeEventListener('offline', updateConnectionStatus);
+      clearInterval(interval);
+    };
   }, []);
 
   const loadRecords = async () => {
@@ -65,6 +82,8 @@ export function RecordsList() {
     setSyncing(true);
     try {
       await SyncService.syncPendingRecords();
+      // Also retry any failed uploads
+      await SyncService.retryFailedUploads();
     } catch (error) {
       console.error('Sync failed:', error);
       alert(t('alerts.syncFailed'));
@@ -106,6 +125,7 @@ export function RecordsList() {
   });
 
   const pendingCount = records.filter(r => !r.isUploaded).length;
+  const retryCount = SyncService.getRetryQueueCount();
 
   if (showAuthForSync) {
     return <AuthPage onAuthSuccess={handleAuthSuccess} onCancel={handleAuthCancel} />;
@@ -125,23 +145,44 @@ export function RecordsList() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">{t('allRecords')}</h2>
-          <p className="text-gray-600">{t('totalChildren', { count: records.length })} {t('pendingUploads', { count: pendingCount })}</p>
+          <p className="text-gray-600">
+            {t('totalChildren', { count: records.length })} • 
+            {pendingCount > 0 && ` ${pendingCount} pending`}
+            {retryCount > 0 && ` • ${retryCount} failed`}
+          </p>
         </div>
         
-        {pendingCount > 0 && (
-          <button 
-            onClick={handleSync}
-            disabled={syncing}
-            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
-          >
-            {syncing ? (
-              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <Upload className="w-4 h-4" />
-            )}
-            <span>{t('syncRecords', { count: pendingCount })}</span>
-          </button>
-        )}
+        <div className="flex items-center space-x-3">
+          {/* Connection Status Indicator */}
+          <div className={`flex items-center space-x-2 px-3 py-1 rounded-full text-sm ${
+            connectionStatus.isOnline 
+              ? 'bg-green-100 text-green-800' 
+              : 'bg-red-100 text-red-800'
+          }`}>
+            <Wifi className="w-4 h-4" />
+            <span>{connectionStatus.isOnline ? 'Online' : 'Offline'}</span>
+          </div>
+
+          {/* Sync Button */}
+          {(pendingCount > 0 || retryCount > 0) && (
+            <button 
+              onClick={handleSync}
+              disabled={syncing || !connectionStatus.isOnline}
+              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+            >
+              {syncing ? (
+                <RefreshCw className="w-4 h-4 animate-spin" />
+              ) : (
+                <Upload className="w-4 h-4" />
+              )}
+              <span>
+                {syncing ? 'Syncing...' : 
+                 retryCount > 0 ? `Retry ${retryCount + pendingCount}` :
+                 `Sync ${pendingCount}`}
+              </span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Search and Filter */}
@@ -202,8 +243,17 @@ export function RecordsList() {
                         </span>
                       ) : (
                         <span className="flex items-center space-x-1">
-                          <Clock className="w-3 h-3" />
-                          <span>{t('pending')}</span>
+                          {connectionStatus.syncInProgress ? (
+                            <>
+                              <RefreshCw className="w-3 h-3 animate-spin" />
+                              <span>Syncing</span>
+                            </>
+                          ) : (
+                            <>
+                              <Clock className="w-3 h-3" />
+                              <span>{t('pending')}</span>
+                            </>
+                          )}
                         </span>
                       )}
                     </span>

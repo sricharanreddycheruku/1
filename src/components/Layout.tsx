@@ -11,6 +11,7 @@ interface LayoutProps {
 export function Layout({ children, title, showSyncStatus = true }: LayoutProps) {
   const [connectionStatus, setConnectionStatus] = React.useState(SyncService.getConnectionStatus());
   const [pendingCount, setPendingCount] = React.useState(0);
+  const [retryCount, setRetryCount] = React.useState(0);
   const [language, setLanguage] = React.useState<string>(localStorage.getItem('appLanguage') || 'en');
 
   React.useEffect(() => {
@@ -26,6 +27,7 @@ export function Layout({ children, title, showSyncStatus = true }: LayoutProps) 
     const updatePendingCount = async () => {
       const count = await SyncService.getPendingRecordsCount();
       setPendingCount(count);
+      setRetryCount(SyncService.getRetryQueueCount());
     };
 
     window.addEventListener('online', updateStatus);
@@ -33,7 +35,10 @@ export function Layout({ children, title, showSyncStatus = true }: LayoutProps) 
     window.addEventListener('syncComplete', updatePendingCount);
     
     updatePendingCount();
-    const interval = setInterval(updateStatus, 5000);
+    const interval = setInterval(() => {
+      updateStatus();
+      updatePendingCount();
+    }, 5000);
 
     return () => {
       window.removeEventListener('online', updateStatus);
@@ -86,6 +91,14 @@ export function Layout({ children, title, showSyncStatus = true }: LayoutProps) 
                       <Upload className="w-4 h-4" />
                     )}
                     <span>{pendingCount} pending</span>
+                  </div>
+                )}
+
+                {/* Retry Queue Status */}
+                {retryCount > 0 && (
+                  <div className="flex items-center space-x-2 px-3 py-1 bg-red-100 text-red-800 rounded-full text-sm">
+                    <AlertTriangle className="w-4 h-4" />
+                    <span>{retryCount} failed</span>
                   </div>
                 )}
               </div>

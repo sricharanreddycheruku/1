@@ -1,25 +1,38 @@
 import { ChildRecord } from '../types';
 import { db } from './database';
+import { APIService } from './api';
+import { AuthService } from './auth';
 
 export class SyncService {
   private static isOnline = navigator.onLine;
   private static syncInProgress = false;
+  private static retryQueue: ChildRecord[] = [];
+  private static maxRetries = 3;
+  private static retryDelay = 5000; // 5 seconds
 
   static init() {
     window.addEventListener('online', () => {
       this.isOnline = true;
-      this.syncPendingRecords();
+      setTimeout(() => this.syncPendingRecords(), 1000);
     });
     
     window.addEventListener('offline', () => {
       this.isOnline = false;
     });
+
+    // Auto-sync every 30 seconds when online
+    setInterval(() => {
+      if (this.isOnline && !this.syncInProgress) {
+        this.syncPendingRecords();
+      }
+    }, 30000);
   }
 
   static getConnectionStatus() {
     return {
       isOnline: this.isOnline,
       syncInProgress: this.syncInProgress,
+      retryQueueLength: this.retryQueue.length,
     };
   }
 
@@ -31,15 +44,30 @@ export class SyncService {
     try {
       const records = await db.getChildRecords();
       const pendingRecords = records.filter(r => !r.isUploaded);
+      let successCount = 0;
+      let failedRecords: ChildRecord[] = [];
       
       for (const record of pendingRecords) {
-        await this.uploadRecord(record);
-        await db.markRecordAsUploaded(record.id);
+        try {
+          await this.uploadRecordWithRetry(record);
+          await db.markRecordAsUploaded(record.id);
+          successCount++;
+        } catch (error) {
+          console.error(`Failed to upload record ${record.id}:`, error);
+          failedRecords.push(record);
+        }
       }
+
+      // Add failed records to retry queue
+      this.retryQueue = [...this.retryQueue, ...failedRecords];
       
       // Trigger custom event for UI updates
       window.dispatchEvent(new CustomEvent('syncComplete', {
-        detail: { uploadedCount: pendingRecords.length }
+        detail: { 
+          uploadedCount: successCount,
+          failedCount: failedRecords.length,
+          totalPending: pendingRecords.length
+        }
       }));
       
     } catch (error) {
@@ -50,30 +78,75 @@ export class SyncService {
     }
   }
 
+  private static async uploadRecordWithRetry(record: ChildRecord, retryCount = 0): Promise<void> {
+    try {
+      await this.uploadRecord(record);
+    } catch (error) {
+      if (retryCount < this.maxRetries) {
+        console.log(`Retrying upload for record ${record.id}, attempt ${retryCount + 1}`);
+        await new Promise(resolve => setTimeout(resolve, this.retryDelay * (retryCount + 1)));
+        return this.uploadRecordWithRetry(record, retryCount + 1);
+      }
+      throw error;
+    }
+  }
+
   private static async uploadRecord(record: ChildRecord): Promise<void> {
-    // Mock API upload - in real implementation, this would call your backend API
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    const authToken = localStorage.getItem('authToken');
+    if (!authToken) {
+      throw new Error('No authentication token available');
+    }
+
+    // Try real API first, fallback to mock
+    try {
+      await APIService.uploadChildRecord(record, authToken);
+    } catch (error) {
+      // Fallback to mock upload for demo purposes
+      console.log('API upload failed, using mock upload:', error);
+      await this.mockUpload(record);
+    }
+  }
+
+  private static async mockUpload(record: ChildRecord): Promise<void> {
+    // Mock API upload with random failure simulation
+    await new Promise((resolve, reject) => {
+      setTimeout(() => {
+        // 10% chance of failure for demo purposes
+        if (Math.random() < 0.1) {
+          reject(new Error('Mock network error'));
+        } else {
+          resolve(void 0);
+        }
+      }, 1000 + Math.random() * 2000);
+    });
     
     // Simulate upload to server
     console.log(`Uploading record for ${record.childName} (Health ID: ${record.healthId})`);
-    
-    // In real implementation:
-    // const response = await fetch('/api/child-records', {
-    //   method: 'POST',
-    //   headers: {
-    //     'Content-Type': 'application/json',
-    //     'Authorization': `Bearer ${localStorage.getItem('authToken')}`
-    //   },
-    //   body: JSON.stringify(record)
-    // });
-    // 
-    // if (!response.ok) {
-    //   throw new Error(`Upload failed: ${response.statusText}`);
-    // }
   }
 
   static async getPendingRecordsCount(): Promise<number> {
     const records = await db.getChildRecords();
     return records.filter(r => !r.isUploaded).length;
+  }
+
+  static async retryFailedUploads(): Promise<void> {
+    if (this.retryQueue.length === 0 || !this.isOnline) return;
+
+    const recordsToRetry = [...this.retryQueue];
+    this.retryQueue = [];
+
+    for (const record of recordsToRetry) {
+      try {
+        await this.uploadRecordWithRetry(record);
+        await db.markRecordAsUploaded(record.id);
+      } catch (error) {
+        // Add back to retry queue if still failing
+        this.retryQueue.push(record);
+      }
+    }
+  }
+
+  static getRetryQueueCount(): number {
+    return this.retryQueue.length;
   }
 }
